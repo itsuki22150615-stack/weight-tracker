@@ -1,0 +1,308 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>体重管理</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #f3f5f8; color: #253047;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  header {
+    background: #3659a2; color: white; padding: 24px 18px;
+  }
+  header h1 { margin: 0 0 6px; font-size: 24px; }
+  header p { margin: 0; opacity: .85; font-size: 14px; }
+  main { max-width: 620px; margin: auto; padding: 16px; }
+  .card {
+    background: white; border-radius: 16px; padding: 20px;
+    margin-bottom: 16px; box-shadow: 0 3px 12px #15294d0b;
+  }
+  h2 { font-size: 18px; margin: 0 0 16px; }
+  label { display: block; font-size: 14px; margin: 12px 0 6px; }
+  input, button {
+    width: 100%; padding: 13px; border-radius: 10px;
+    font-size: 16px;
+  }
+  input { border: 1px solid #ccd3df; background: white; color: #253047; }
+  button { border: 0; cursor: pointer; font-weight: bold; }
+  .primary { background: #3659a2; color: white; margin-top: 16px; }
+  .delete { width: auto; padding: 8px 12px; font-size: 13px;
+    background: #fff0f0; color: #b42318; }
+  .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .metric { background: #edf2ff; padding: 15px; border-radius: 12px; }
+  .metric small { color: #52617c; }
+  .metric strong { display: block; font-size: 25px; margin-top: 7px; }
+  #message { font-size: 14px; margin-top: 12px; }
+  .history-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 13px 0; border-bottom: 1px solid #edf0f4;
+  }
+  .history-row:last-child { border-bottom: 0; }
+  .weight { font-size: 18px; font-weight: bold; }
+  .muted { color: #778196; font-size: 13px; }
+  canvas { width: 100%; height: 230px; display: block; }
+  .note { font-size: 12px; color: #778196; line-height: 1.7; }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚖️ 体重管理</h1>
+  <p>毎日の記録を、かんたんに。</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>今日の体重を記録</h2>
+    <label for="date">日付</label>
+    <input type="date" id="date">
+    <label for="weight">体重（kg）</label>
+    <input type="number" id="weight" min="1" max="500"
+      step="0.1" placeholder="例：63.2">
+    <button class="primary" id="save">記録を保存する</button>
+    <div id="message" role="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>体重サマリー</h2>
+    <div class="summary">
+      <div class="metric">
+        <small>最新の体重</small>
+        <strong id="latest">-- kg</strong>
+      </div>
+      <div class="metric">
+        <small>前回からの変化</small>
+        <strong id="change">--</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>体重の推移</h2>
+    <canvas id="chart" aria-label="体重の推移グラフ"></canvas>
+    <p class="note">直近30件の記録を表示します。</p>
+  </section>
+
+  <section class="card">
+    <h2>記録履歴</h2>
+    <div id="history"></div>
+    <p class="note">このブラウザ内に記録を保存します。</p>
+    <button id="export" style="background:#e9eef8;color:#253047;margin-top:12px">
+      CSVでバックアップ
+    </button>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const STORAGE_KEY = "weightAppRecordsV1";
+let records = [];
+
+try {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  records = saved ? JSON.parse(saved) : [];
+  if (!Array.isArray(records)) records = [];
+} catch {
+  records = [];
+}
+
+const today = new Date();
+const localDate = [
+  today.getFullYear(),
+  String(today.getMonth() + 1).padStart(2, "0"),
+  String(today.getDate()).padStart(2, "0")
+].join("-");
+$("date").value = localDate;
+
+function sortedRecords() {
+  return [...records].sort((a, b) => b.date.localeCompare(a.date));
+}
+
+function saveRecords() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+    return true;
+  } catch {
+    $("message").textContent =
+      "保存できませんでした。ブラウザの設定を確認してください。";
+    return false;
+  }
+}
+
+function render() {
+  const sorted = sortedRecords();
+  const latest = sorted[0];
+  $("latest").textContent = latest ? latest.weight.toFixed(1) + " kg" : "-- kg";
+
+  if (sorted.length >= 2) {
+    const diff = sorted[0].weight - sorted[1].weight;
+    $("change").textContent =
+      (diff > 0 ? "+" : "") + diff.toFixed(1) + " kg";
+  } else {
+    $("change").textContent = "--";
+  }
+
+  const history = $("history");
+  history.replaceChildren();
+
+  if (sorted.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "まだ記録がありません。最初の体重を記録しましょう。";
+    history.append(empty);
+  }
+
+  sorted.forEach(record => {
+    const row = document.createElement("div");
+    row.className = "history-row";
+
+    const info = document.createElement("div");
+    const date = document.createElement("div");
+    date.className = "muted";
+    date.textContent = record.date;
+    const weight = document.createElement("div");
+    weight.className = "weight";
+    weight.textContent = record.weight.toFixed(1) + " kg";
+    info.append(date, weight);
+
+    const del = document.createElement("button");
+    del.className = "delete";
+    del.textContent = "削除";
+    del.addEventListener("click", () => {
+      if (!confirm(record.date + " の記録を削除しますか？")) return;
+      records = records.filter(r => r.id !== record.id);
+      if (saveRecords()) {
+        $("message").textContent = "記録を削除しました。";
+        render();
+      }
+    });
+
+    row.append(info, del);
+    history.append(row);
+  });
+
+  drawChart(sorted.slice(0, 30).reverse());
+}
+
+function drawChart(data) {
+  const canvas = $("chart");
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(rect.width, 280);
+  const height = 230;
+  canvas.width = width * ratio;
+  canvas.height = height * ratio;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(ratio, ratio);
+  ctx.clearRect(0, 0, width, height);
+
+  if (!data.length) {
+    ctx.fillStyle = "#778196";
+    ctx.font = "14px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("記録するとグラフが表示されます", width / 2, height / 2);
+    return;
+  }
+
+  const values = data.map(r => r.weight);
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  if (min === max) { min -= 1; max += 1; }
+  const pad = { left: 38, right: 12, top: 20, bottom: 32 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const x = i => pad.left + (data.length === 1 ? plotW / 2 :
+    i * plotW / (data.length - 1));
+  const y = v => pad.top + (max - v) / (max - min) * plotH;
+
+  ctx.font = "11px sans-serif";
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#778196";
+  for (let i = 0; i <= 4; i++) {
+    const v = min + (max - min) * i / 4;
+    const yy = y(v);
+    ctx.strokeStyle = "#e8ecf3";
+    ctx.beginPath(); ctx.moveTo(pad.left, yy);
+    ctx.lineTo(width - pad.right, yy); ctx.stroke();
+    ctx.fillText(v.toFixed(1), pad.left - 6, yy + 4);
+  }
+
+  ctx.strokeStyle = "#3659a2";
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  data.forEach((r, i) => {
+    if (i === 0) ctx.moveTo(x(i), y(r.weight));
+    else ctx.lineTo(x(i), y(r.weight));
+  });
+  ctx.stroke();
+
+  data.forEach((r, i) => {
+    ctx.fillStyle = "#3659a2";
+    ctx.beginPath(); ctx.arc(x(i), y(r.weight), 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  ctx.fillStyle = "#778196";
+  ctx.textAlign = "left";
+  ctx.fillText(data[0].date.slice(5), pad.left, height - 8);
+  ctx.textAlign = "right";
+  ctx.fillText(data[data.length - 1].date.slice(5),
+    width - pad.right, height - 8);
+}
+
+$("save").addEventListener("click", () => {
+  const date = $("date").value;
+  const weight = Number($("weight").value);
+
+  if (!date) {
+    $("message").textContent = "日付を入力してください。";
+    return;
+  }
+  if (!$("weight").value || !Number.isFinite(weight) ||
+      weight < 1 || weight > 500) {
+    $("message").textContent = "体重を正しく入力してください。";
+    return;
+  }
+
+  const existing = records.find(r => r.date === date);
+  if (existing) {
+    if (!confirm(date + " の記録を上書きしますか？")) return;
+    existing.weight = weight;
+  } else {
+    records.push({
+      id: Date.now().toString() + Math.random().toString(16).slice(2),
+      date,
+      weight
+    });
+  }
+
+  if (saveRecords()) {
+    $("message").textContent = date + " の記録を保存しました！";
+    $("weight").value = "";
+    render();
+  }
+});
+
+$("export").addEventListener("click", () => {
+  const rows = [["日付", "体重(kg)"],
+    ...sortedRecords().map(r => [r.date, r.weight.toFixed(1)])];
+  const csv = "\uFEFF" + rows.map(row =>
+    row.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(",")
+  ).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "体重記録.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+window.addEventListener("resize", render);
+render();
+</script>
+</body>
+</html>
